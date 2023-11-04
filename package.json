@@ -1,0 +1,24 @@
+{
+  "name": "feros-proxy",
+  "version": "1.0.2",
+  "bin": "index.js",
+  "main": "index.js",
+  "author": "xTCry [Vladislav Kh] (https://github.com/xTCry/)",
+  "license": "UNLICENSED",
+  "private": true,
+  "pkg": {
+    "outputPath": "dist",
+    "targets": [
+      "node12-win-x64"
+    ]
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.13",
+    "@types/yargs": "^17.0.29",
+    "pkg": "^5.8.1"
+  }
+}
