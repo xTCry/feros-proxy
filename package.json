@@ -1,11 +1,16 @@
 {
   "name": "feros-proxy",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "bin": "index.js",
   "main": "index.js",
   "author": "xTCry [Vladislav Kh] (https://github.com/xTCry/)",
   "license": "UNLICENSED",
   "private": true,
+  "scripts": {
+    "build": "pkg .",
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
   "pkg": {
     "outputPath": "dist",
     "targets": [
@@ -13,11 +18,16 @@
     ]
   },
   "dependencies": {
+    "axios": "^0.27",
+    "fs-extra": "^11.2.0",
     "http-proxy": "^1.18.1",
+    "prompts": "^2.4.2",
+    "ws": "^8.15.1",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
     "@types/http-proxy": "^1.17.13",
+    "@types/ws": "^8.5.10",
     "@types/yargs": "^17.0.29",
     "pkg": "^5.8.1"
   }
