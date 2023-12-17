@@ -1,6 +1,6 @@
 {
   "name": "feros-proxy",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "bin": "index.js",
   "main": "index.js",
   "author": "xTCry [Vladislav Kh] (https://github.com/xTCry/)",
@@ -19,9 +19,11 @@
   },
   "dependencies": {
     "axios": "^0.27",
+    "execa": "^5",
     "fs-extra": "^11.2.0",
     "http-proxy": "^1.18.1",
     "prompts": "^2.4.2",
+    "windows-service-controller": "^0.1.5",
     "ws": "^8.15.1",
     "yargs": "^17.7.2"
   },

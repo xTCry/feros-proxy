@@ -6,6 +6,10 @@ const axios = require('axios').default;
 const prompts = require('prompts');
 const path = require('path');
 const fs = require('fs-extra');
+// const { Service } = require('node-windows');
+const sc = require('windows-service-controller');
+const { spawn } = require('child_process');
+const execa = require('execa');
 
 const { argv } = yargs(hideBin(process.argv))
   .option('token', {
@@ -25,38 +29,179 @@ const { argv } = yargs(hideBin(process.argv))
     describe: 'Silence',
     type: 'boolean',
     default: false,
+  })
+  .option('svc', {
+    describe: 'svc',
+    type: 'boolean',
+    default: false,
   });
 
-let { token, address, silence } = argv;
+let { token, address, silence, svc: isSvc } = argv;
 
-const confPath = path.join(process.env.HOME, 'feros-proxy-cfg.json');
+const exeFilename = 'feros-proxy.exe';
+const mainFolder = path.join(process.env.APPDATA || process.env.HOME, 'feros-proxy');
+const confPath = path.join(mainFolder, 'cfg.json');
+const startBatPath = path.join(mainFolder, 'start.bat');
+const startAdmBatPath = path.join(mainFolder, 'start-adm.bat');
 
 let globalWs;
 let allowReconnect = true;
 let usedConfig = false;
 
-// * Start
-ferosProxy(address, token).catch();
-
-// * Functions
-
-async function ferosProxy(address, token, reconnect = false) {
-  if (reconnect && usedConfig) {
-    await fs.writeJson(confPath, { address, token, });
+async function isAdmin() {
+  if (process.platform !== 'win32') {
+    return false;
   }
 
   try {
+    // https://stackoverflow.com/a/21295806/1641422
+    await execa('fsutil', ['dirty', 'query', process.env.systemdrive]);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      try {
+        await execa('fltmc');
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
+  }
+}
+
+// * Start
+bootstrap().catch();
+// * Functions
+
+async function bootstrap() {
+  !silence && console.log('execPath', process.execPath, path.basename(process.execPath));
+  !silence && console.log('mainFolder', mainFolder);
+
+  await fs.ensureDir(mainFolder);
+  ({ address, token } = await loadData({ address, token }));
+
+  let needExePath = path.join(mainFolder, exeFilename);
+  if (path.basename(process.execPath) !== 'node.exe' && process.execPath !== needExePath) {
+    console.log(`Copy from "${process.execPath}" to "${needExePath}"...`);
+
+    try {
+      await fs.copyFile(process.execPath, needExePath);
+    } catch (err) {
+      console.error(err);
+    }
+
+    try {
+      const content = (adm = false) => `start powershell -Command "Start-Process cmd ${adm ? ' -Verb RunAs' : ''} -ArgumentList '/c cd "${mainFolder}" && ${exeFilename} --svc'"`;
+      await fs.writeFile(startBatPath, content());
+      await fs.writeFile(startAdmBatPath, content(true));
+    } catch (err) {
+      console.error(err);
+    }
+
+    // * Try set correct data
+    await promptData({ address, token }, true);
+
+    if (await isAdmin()) {
+      const res = await installSvc(startBatPath || needExePath);
+      isSvc = false;
+      if (res) return;
+    } else {
+      await new Promise((resolve) => {
+        const child = spawn(startAdmBatPath, [], { detached: true });
+        child.once('exit', (c, d) => {
+          console.log(`Exited with code: ${c}, SIGNAL: ${d}`);
+          resolve();
+        });
+      });
+      return;
+    }
+  }
+
+  if (isSvc) {
+    const res = await installSvc(startBatPath || needExePath);
+    if (res) return;
+  }
+
+  // if (path.basename(process.execPath) !== 'node.exe') {
+  //   try {
+  //     console.log('installSvc...');
+  //     await installSvc(needExePath);
+  //     return;
+  //   } catch (err) {
+  //     console.error(err);
+  //   }
+  // }
+
+  console.log('ferosProxy...');
+  await ferosProxy(address, token)
+}
+
+async function installSvc(exePath) {
+  return false;
+  console.log('installSvc...');
+
+  const serviceName = 'FerosProxy';
+
+  // await sc.delete(serviceName).catch();
+  try {
+    await sc.create(serviceName, {
+      binpath: exePath,
+      displayname: 'Feros Proxy',
+      start: 'auto',
+    });
+  } catch (err) {
+    console.error(err);
+  }
+
+  try {
+    await sc.start(serviceName);
+    return true;
+  } catch (err) {
+    console.error(err);
+  }
+
+  return new Promise((resolve, reject) => {
+    resolve();
+    // const child = spawn('sc.exe', ['create', '"FerosProxy"', 'binpath="' + exePath + '"', 'start=auto', 'type=own', 'displayname="Feros Proxy"'], { detached: true });
+    // child.once('exit', (c, d) => {
+    //   console.log(`Exited with code: ${c}, SIGNAL: ${d}`);
+    //   resolve();
+    // });
+
+    // const svc = new Service({
+    //   name: 'FerosProxy',
+    //   description: 'The nodejs.org Feros proxy.',
+    //   script: exePath,
+    // });
+    // svc.on('install', function () {
+    //   svc.start();
+    //   resolve();
+    // });
+    // svc.install();
+  });
+}
+
+async function loadData({ address, token }, forceLoad = false) {
+  try {
     const conf = await fs.readJson(confPath);
-    if (!address) {
+    if (!address || forceLoad) {
       address = conf.address;
       usedConfig = true;
     }
-    if (!token) {
+    if (!token || forceLoad) {
       token = conf.token;
       usedConfig = true;
     }
-  } catch { }
+  } catch (err) {
+    console.error(err);
+  }
 
+  return { address, token }
+}
+
+async function promptData({ address, token }, forceSave = false) {
   let askSave = false;
   if (!address) {
     console.error('Need set ws address');
@@ -98,18 +243,30 @@ async function ferosProxy(address, token, reconnect = false) {
     askSave = true;
   }
 
-  if (askSave) {
+  if (askSave && !forceSave) {
     const response = await prompts({
       type: 'confirm',
       name: 'save',
       message: 'Save token and address?',
       initial: true,
     });
-    if (response.save) {
-      await fs.writeJson(confPath, { address, token, });
-      usedConfig = true;
-    }
+    forceSave = response.save;
   }
+
+  if (forceSave) {
+    await fs.writeJson(confPath, { address, token });
+    usedConfig = true;
+  }
+
+  return { address, token }
+}
+
+async function ferosProxy(address, token, reconnect = false) {
+  if (reconnect && usedConfig) {
+    await fs.writeJson(confPath, { address, token, });
+  }
+
+  ({ address, token } = await promptData({ address, token }));
 
   connect(address, token);
 }
