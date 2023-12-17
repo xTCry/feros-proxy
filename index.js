@@ -18,9 +18,15 @@ const { argv } = yargs(hideBin(process.argv))
     type: 'string',
     default: '',
   })
-  .option('address', {
-    alias: 'a',
-    describe: 'Main server address',
+  .option('apiAddress', {
+    // alias: 'a',
+    describe: 'Main server API address',
+    type: 'string',
+    default: '',
+  })
+  .option('wsAddress', {
+    // alias: 'a',
+    describe: 'Main server WS address',
     type: 'string',
     default: '',
   })
@@ -36,7 +42,7 @@ const { argv } = yargs(hideBin(process.argv))
     default: false,
   });
 
-let { token, address, silence, svc: isSvc } = argv;
+let { token, apiAddress, wsAddress, silence, svc: isSvc } = argv;
 
 const exeFilename = 'feros-proxy.exe';
 const mainFolder = path.join(process.env.APPDATA || process.env.HOME, 'feros-proxy');
@@ -80,7 +86,7 @@ async function bootstrap() {
   !silence && console.log('mainFolder', mainFolder);
 
   await fs.ensureDir(mainFolder);
-  ({ address, token } = await loadData({ address, token }));
+  ({ apiAddress, wsAddress, token } = await loadData({ apiAddress, wsAddress, token }));
 
   let needExePath = path.join(mainFolder, exeFilename);
   if (path.basename(process.execPath) !== 'node.exe' && process.execPath !== needExePath) {
@@ -101,7 +107,7 @@ async function bootstrap() {
     }
 
     // * Try set correct data
-    await promptData({ address, token }, true);
+    await promptData({ apiAddress, wsAddress, token }, true);
 
     if (await isAdmin()) {
       const res = await installSvc(startBatPath || needExePath);
@@ -135,7 +141,7 @@ async function bootstrap() {
   // }
 
   console.log('ferosProxy...');
-  await ferosProxy(address, token)
+  await ferosProxy({ apiAddress, wsAddress, token })
 }
 
 async function installSvc(exePath) {
@@ -183,11 +189,15 @@ async function installSvc(exePath) {
   });
 }
 
-async function loadData({ address, token }, forceLoad = false) {
+async function loadData({ apiAddress, wsAddress, token }, forceLoad = false) {
   try {
     const conf = await fs.readJson(confPath);
-    if (!address || forceLoad) {
-      address = conf.address;
+    if (!apiAddress || forceLoad) {
+      apiAddress = conf.apiAddress;
+      usedConfig = true;
+    }
+    if (!wsAddress || forceLoad) {
+      wsAddress = conf.wsAddress;
       usedConfig = true;
     }
     if (!token || forceLoad) {
@@ -198,17 +208,44 @@ async function loadData({ address, token }, forceLoad = false) {
     console.error(err);
   }
 
-  return { address, token }
+  return { apiAddress, wsAddress, token }
 }
 
-async function promptData({ address, token }, forceSave = false) {
+async function promptData({ apiAddress, wsAddress, token }, forceSave = false) {
   let askSave = false;
-  if (!address) {
+  if (!apiAddress) {
     console.error('Need set ws address');
     do {
       const response = await prompts({
         type: 'text',
-        name: 'address',
+        name: 'value',
+        message: 'API address',
+        // validate: (value) => {
+        //   try {
+        //     new URL(value);
+        //     return true;
+        //   } catch {
+        //     return (`Invalid URL: ${address}`);
+        //   }
+        // }
+      });
+      apiAddress = String(response.value).trim();
+      try {
+        new URL(apiAddress);
+      } catch {
+        console.log(`Invalid URL: ${apiAddress}`);
+        apiAddress = undefined;
+      }
+    } while (!apiAddress);
+    askSave = true;
+  }
+
+  if (!wsAddress) {
+    console.error('Need set ws address');
+    do {
+      const response = await prompts({
+        type: 'text',
+        name: 'value',
         message: 'WS address',
         // validate: (value) => {
         //   try {
@@ -219,27 +256,60 @@ async function promptData({ address, token }, forceSave = false) {
         //   }
         // }
       });
-      address = String(response.address).trim();
+      wsAddress = String(response.value).trim();
       try {
-        new URL(address);
+        new URL(wsAddress);
       } catch {
-        console.log(`Invalid URL: ${address}`);
-        address = undefined;
+        console.log(`Invalid URL: ${wsAddress}`);
+        wsAddress = undefined;
       }
-    } while (!address);
+    } while (!wsAddress);
     askSave = true;
   }
 
   if (!token) {
     console.error('Need set ws token');
-    do {
-      const response = await prompts({
-        type: 'text',
-        name: 'token',
-        message: 'Access token',
-      });
-      token = String(response.token).trim();
-    } while (!token);
+    const response = await prompts({
+      type: 'select',
+      name: 'value',
+      message: 'Auth method',
+      choices: [
+        { title: 'Code', description: 'Get code on telegram bot by /auth command', value: 'code' },
+        { title: 'Token', description: 'Need your access token', value: 'token' },
+      ],
+      initial: 0,
+    });
+
+    if (response.value === 'code') {
+      do {
+        const response = await prompts({
+          type: 'text',
+          name: 'code',
+          message: 'Auth code',
+        });
+        let auth_code = String(response.code).trim();
+
+        try {
+          const {
+            data: { access_token, user },
+          } = await axios.post(`${apiAddress}/auth/telegram_code`, { auth_code });
+          console.log(`Access token success for [${user && user.fullname}]`);
+          token = access_token;
+        } catch (err) {
+          console.error(err.message);
+        }
+      } while (!token);
+    } else {
+      do {
+        const response = await prompts({
+          type: 'text',
+          name: 'token',
+          message: 'Access token',
+        });
+        token = String(response.token).trim();
+      } while (!token);
+    }
+
     askSave = true;
   }
 
@@ -247,28 +317,28 @@ async function promptData({ address, token }, forceSave = false) {
     const response = await prompts({
       type: 'confirm',
       name: 'save',
-      message: 'Save token and address?',
+      message: 'Save token and addresses?',
       initial: true,
     });
     forceSave = response.save;
   }
 
   if (forceSave) {
-    await fs.writeJson(confPath, { address, token });
+    await fs.writeJson(confPath, { apiAddress, wsAddress, token });
     usedConfig = true;
   }
 
-  return { address, token }
+  return { apiAddress, wsAddress, token }
 }
 
-async function ferosProxy(address, token, reconnect = false) {
+async function ferosProxy({ apiAddress, wsAddress, token }, reconnect = false) {
   if (reconnect && usedConfig) {
-    await fs.writeJson(confPath, { address, token, });
+    await fs.writeJson(confPath, { apiAddress, wsAddress, token, });
   }
 
-  ({ address, token } = await promptData({ address, token }));
+  ({ apiAddress, wsAddress, token } = await promptData({ apiAddress, wsAddress, token }));
 
-  connect(address, token);
+  connect({ apiAddress, wsAddress, token });
 }
 
 async function makeHttpRequest(ws, id, type, baseURL, method, url, data) {
@@ -382,10 +452,10 @@ async function closeWebSocket(ws, id, wsEndpointUrl) {
 }
 
 let wsAttempts = 0;
-function connect(address, token) {
-  console.log(`[${new Date().toLocaleString()}]\tTry connect to [${address}]`);
+function connect({ apiAddress, wsAddress, token }) {
+  console.log(`[${new Date().toLocaleString()}]\tTry connect to [${wsAddress}]`);
 
-  globalWs = new WebSocket(address, {
+  globalWs = new WebSocket(wsAddress, {
     headers: {
       Authorization: `Bearer ${token}`,
     }
@@ -397,7 +467,7 @@ function connect(address, token) {
       token = undefined;
     }
     if (err.code === 'ENETUNREACH') {
-      address = undefined;
+      wsAddress = undefined;
     }
   });
 
@@ -414,7 +484,7 @@ function connect(address, token) {
       let sec = 5 + Math.min(++wsAttempts, 20);
       console.log(`Try reconnect in ${sec} sec...`);
       setTimeout(function timeout() {
-        ferosProxy/* connect */(address, token, true);
+        ferosProxy/* connect */({ apiAddress, wsAddress, token }, true);
       }, 1e3 * sec);
     }
   });
