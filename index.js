@@ -205,7 +205,9 @@ async function loadData({ apiAddress, wsAddress, token }, forceLoad = false) {
       usedConfig = true;
     }
   } catch (err) {
-    console.error(err);
+    if (err.code !== 'ENOENT') {
+      console.error(err);
+    }
   }
 
   return { apiAddress, wsAddress, token }
@@ -214,7 +216,7 @@ async function loadData({ apiAddress, wsAddress, token }, forceLoad = false) {
 async function promptData({ apiAddress, wsAddress, token }, forceSave = false) {
   let askSave = false;
   if (!apiAddress) {
-    console.error('Need set ws address');
+    console.error('Need set API address');
     do {
       const response = await prompts({
         type: 'text',
@@ -241,7 +243,7 @@ async function promptData({ apiAddress, wsAddress, token }, forceSave = false) {
   }
 
   if (!wsAddress) {
-    console.error('Need set ws address');
+    console.error('Need set WS address');
     do {
       const response = await prompts({
         type: 'text',
@@ -471,14 +473,18 @@ function connect({ apiAddress, wsAddress, token }) {
     }
   });
 
+  let pingTimer;
   globalWs.on('open', () => {
     console.log(`[${new Date().toLocaleString()}]\tConnected`);
-    globalWs.send(Date.now());
+    pingTimer = setInterval(() => {
+      globalWs && globalWs.send(Date.now());
+    });
     wsAttempts = 0;
   });
 
   globalWs.on('close', () => {
     console.log(`[${new Date().toLocaleString()}]\tDisconnected`);
+    clearInterval(pingTimer);
 
     if (allowReconnect) {
       let sec = 5 + Math.min(++wsAttempts, 20);
